@@ -32,7 +32,7 @@ the bound.  That factor is the thinning, not the estimator -- a spot check at
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 import numpy as np
-from scipy.optimize import minimize
+from scipy.optimize import least_squares
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -49,7 +49,13 @@ ML_DECIM = 4            # ML refinement thins further; the coarse FFT does not
 CKPT = os.path.join(os.path.dirname(__file__), "figs", "exp_f_ckpt.json")
 TIME_BUDGET = float(os.environ.get("EXP_F_BUDGET", 95))
 R_GUESS = 30.0                      # fixed; never estimated
-COARSE_ANGLE_ERR_DEG = 0.016        # what Experiment B actually delivers
+
+# The coarse angle handed to Stage B is not a constant.  Experiment B measured
+# 0.016 deg NOISELESSLY; under noise Experiment C measured it per SNR, and that
+# is what Stage B actually receives.  Using the noiseless figure at every SNR
+# would flatter the scheme at the low end, so the measured values are used.
+_c = np.load(os.path.join(FIG, "exp_c.npz"))
+COARSE_ANGLE_ERR_DEG = dict(zip([int(v) for v in _c["snr"]], _c["coarse_th"]))
 
 
 def beams(cfg, r0, th0, delta, f):
@@ -95,8 +101,15 @@ def coarse_range(z, f, r0):
     return r0 + dr, r0 - dr
 
 
-def estimate(cfg, z, V, f, th_init, r0):
-    """Two-parameter local ML on the whitened likelihood."""
+def estimate(cfg, z, V, f, th_init, r0, th_halfwidth=None):
+    """Two-parameter local ML on the whitened likelihood.
+
+    The angle search is bounded to th_init +- th_halfwidth.  Unbounded
+    Nelder-Mead occasionally walks into a sidelobe of the combined pattern about
+    1.5 beamwidths out and returns a confidently wrong angle; the bound keeps it
+    in the mainlobe.  The half-width is set to three times the MEASURED stage-A
+    angle RMSE, not tuned to the answer, and the fraction of trials that leave
+    the window is reported rather than hidden."""
     cands = [x for x in coarse_range(z, f, r0) if 0.5 < x < 200]
     if len(cands) == 2 and abs(cands[0] - cands[1]) < 1e-6:
         cands = cands[:1]                      # the FFT found no offset; one start suffices
@@ -110,12 +123,22 @@ def estimate(cfg, z, V, f, th_init, r0):
         den = np.vdot(h, h).real
         return -num / max(den, 1e-300)
 
-    best = None
+    def resid(p):
+        """Complex residual with the amplitude concentrated out, split for LM."""
+        h = response(cfg, p[0], p[1], V, f) @ W.T
+        alpha = np.vdot(h, zw) / max(np.vdot(h, h).real, 1e-300)
+        e = (zw - alpha * h).ravel()
+        return np.concatenate([e.real, e.imag])
+
+    best, best_cost = None, np.inf
     for r_try in cands:
-        sol = minimize(nll, [r_try, th_init], method="Nelder-Mead",
-                       options=dict(xatol=1e-10, fatol=1e-10, maxiter=300))
-        if best is None or sol.fun < best.fun:
-            best = sol
+        lo = [max(0.5, r_try - 5.0), th_init - (th_halfwidth or np.deg2rad(1.0))]
+        hi = [r_try + 5.0, th_init + (th_halfwidth or np.deg2rad(1.0))]
+        sol = least_squares(resid, [r_try, th_init], bounds=(lo, hi),
+                            method="trf", xtol=1e-14, ftol=1e-14, gtol=1e-14)
+        if sol.cost < best_cost:
+            best, best_cost = sol, sol.cost
+
     return (best.x[1], best.x[0]) if best is not None else (th_init, r0)
 
 
@@ -130,7 +153,9 @@ def run():
     print(f"[F] user ({np.rad2deg(th_true):.3f} deg, {r_true} m), N={cfg.N}, M={cfg.M}")
     print(f"    monopulse delta = {np.rad2deg(delta):.4f} deg (0.25 beamwidths), "
           f"range guess pinned at {R_GUESS} m, never estimated")
-    print(f"    T = 3 probes total (1 squint sweep for angle + 2 monopulse beams)\n")
+    print(f"    T = 3 probes total (1 squint sweep for angle + 2 monopulse beams)")
+    print(f"    stage-A angle error per SNR (measured in Experiment C): "
+          f"{ {k: round(float(v), 4) for k, v in COARSE_ANGLE_ERR_DEG.items()} }\n")
 
     import json, time
     done = json.load(open(CKPT)) if os.path.exists(CKPT) else {}
@@ -142,23 +167,26 @@ def run():
         if time.perf_counter() - t0 > TIME_BUDGET:
             print(f"  [budget reached, {len(done)}/{len(SNRS)} done -- re-run to continue]")
             return
-        et, er = [], []
+        ce = max(COARSE_ANGLE_ERR_DEG[snr], 1e-3)   # measured stage-A angle RMSE
+        et, er, n_edge = [], [], 0
         for _ in range(N_TRIAL):
-            th_hat0 = th_true + np.deg2rad(COARSE_ANGLE_ERR_DEG) * rng.standard_normal()
+            th_hat0 = th_true + np.deg2rad(ce) * rng.standard_normal()
             V = beams(cfg, R_GUESS, th_hat0, delta, f)
             z = simulate(cfg, r_true, th_true, V, f, snr, rng)
-            th, r = estimate(cfg, z, V, f, th_hat0, R_GUESS)
+            th, r = estimate(cfg, z, V, f, th_hat0, R_GUESS,
+                             th_halfwidth=np.deg2rad(3 * ce))
             et.append(th - th_true)
             er.append(r - r_true)
+            n_edge += abs(th - th_hat0) > 0.98 * np.deg2rad(3 * ce)
         rms = lambda v: float(np.sqrt(np.mean(np.square(v))))
         V0 = beams(cfg, R_GUESS, th_true, delta, f)
         bt, br = bounds(fim(cfg, r_true, th_true, snr, f, np.linalg.qr(V0)[0]))
-        done[str(snr)] = [np.rad2deg(rms(et)), rms(er), bt, br]
+        done[str(snr)] = [np.rad2deg(rms(et)), rms(er), bt, br, 100.0 * n_edge / N_TRIAL]
         json.dump(done, open(CKPT, "w"))
         d = done[str(snr)]
-        print(f"  SNR={snr:+3d} dB | RMSE_th {d[0]:.3e} deg (bound {d[2]:.3e}, "
-              f"{d[0]/d[2]:5.2f}x) | RMSE_r {d[1]:.3e} m (bound {d[3]:.3e}, "
-              f"{d[1]/d[3]:5.2f}x)", flush=True)
+        print(f"  SNR={snr:+3d} dB | RMSE_th {d[0]:.3e} deg ({d[0]/d[2]:5.2f}x) | "
+              f"RMSE_r {d[1]:.3e} m ({d[1]/d[3]:5.2f}x) | window +-{3*ce:.3f} deg, "
+              f"{d[4]:.0f}% at edge", flush=True)
 
     res_th = [done[str(s)][0] for s in SNRS]; res_r = [done[str(s)][1] for s in SNRS]
     b_th = [done[str(s)][2] for s in SNRS];   b_r = [done[str(s)][3] for s in SNRS]
