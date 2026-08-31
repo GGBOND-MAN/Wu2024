@@ -48,11 +48,18 @@ r_true = 30; th_true = deg2rad(15);
 bw = 0.886*cfg.lambda/cfg.D;
 fprintf('N=%d  M=%d  W=%.0f GHz  beamwidth=%.4f deg\n', cfg.N, cfg.M, cfg.W/1e9, rad2deg(bw));
 fprintf('unambiguous range c*M/(2W) = %.1f m\n\n', cfg.c0*cfg.M/(2*cfg.W));
-fprintf('%6s%14s%14s\n','SNR','RMSE_th(deg)','RMSE_r(m)');
+% RMSE is outlier-driven: a single badly converged trial out of thirty can lift
+% it by an order of magnitude while the median is untouched.  Reporting the
+% median and the worst trial alongside makes that visible instead of hiding it.
+fprintf('%6s%13s%12s%12s%13s%12s%12s\n', 'SNR', ...
+        'RMSEth', 'med|dth|', 'max|dth|', 'RMSEr', 'med|dr|', 'max|dr|');
 for snr = [-10 -5 0 5 10 15 20]
-    [rt, rr] = trial_set(cfg, r_true, th_true, snr, 30, 0.153*bw, 0.25*bw);
-    fprintf('%6d%14.3e%14.3e\n', snr, rt, rr);
+    [rt, rr, st] = trial_set(cfg, r_true, th_true, snr, 30, 0.153*bw, 0.25*bw);
+    fprintf('%6d%13.3e%12.3e%12.3e%13.3e%12.3e%12.3e\n', snr, ...
+            rt, st.med_th, st.max_th, rr, st.med_r, st.max_r);
 end
+fprintf('\nA max far above the median at one SNR is a lone convergence failure,\n');
+fprintf('not a property of the estimator; raise N_TRIAL to measure its rate.\n');
 end
 
 function sweepN()
@@ -61,8 +68,9 @@ r_true = 30; th_true = deg2rad(15);
 res = zeros(numel(Ns),2);
 for i = 1:numel(Ns)
     cfg = config(Ns(i)); bw = 0.886*cfg.lambda/cfg.D; rng(i);
-    [res(i,1), res(i,2)] = trial_set(cfg, r_true, th_true, snr, N_TRIAL, 0.153*bw, 0.25*bw);
-    fprintf('N=%5d  RMSE_th %.3e deg  RMSE_r %.3e m\n', Ns(i), res(i,1), res(i,2));
+    [res(i,1), res(i,2), st] = trial_set(cfg, r_true, th_true, snr, N_TRIAL, 0.153*bw, 0.25*bw);
+    fprintf('N=%5d  RMSE_r %.3e m  (median %.3e, max %.3e)\n', ...
+            Ns(i), res(i,2), st.med_r, st.max_r);
 end
 p = polyfit(log(Ns(:)), log(res(:,2)), 1);
 fprintf('\nfitted exponent in N: %+.2f   predicted -0.50 (curvature would be -2.50)\n', p(1));
@@ -80,8 +88,9 @@ for i = 1:numel(Ws)
     cfg = config(256, Ws(i)); bw = 0.886*cfg.lambda/cfg.D; rng(100+i);
     % c*M/(2W) must stay above the sensing region or the delay wraps
     assert(cfg.c0*cfg.M/(2*cfg.W) > 50, 'bandwidth too large: range would alias');
-    [res(i,1), res(i,2)] = trial_set(cfg, r_true, th_true, snr, N_TRIAL, 0.153*bw, 0.25*bw);
-    fprintf('W=%4.1f GHz  RMSE_th %.3e deg  RMSE_r %.3e m\n', Ws(i)/1e9, res(i,1), res(i,2));
+    [res(i,1), res(i,2), st] = trial_set(cfg, r_true, th_true, snr, N_TRIAL, 0.153*bw, 0.25*bw);
+    fprintf('W=%4.1f GHz  RMSE_r %.3e m  (median %.3e, max %.3e)\n', ...
+            Ws(i)/1e9, res(i,2), st.med_r, st.max_r);
 end
 p = polyfit(log(Ws(:)), log(res(:,2)), 1);
 fprintf('\nfitted exponent in W: %+.2f   predicted -1.00 (curvature is blind to W)\n', p(1));
@@ -91,7 +100,7 @@ xlabel('bandwidth W (GHz)'); ylabel('RMSE_r (m)');
 legend('measured','W^{-1} reference');
 end
 
-function [rmse_th, rmse_r] = trial_set(cfg, r_true, th_true, snr_db, n_trial, ce, delta)
+function [rmse_th, rmse_r, st] = trial_set(cfg, r_true, th_true, snr_db, n_trial, ce, delta)
 et = zeros(n_trial,1); er = zeros(n_trial,1);
 for t = 1:n_trial
     th0 = th_true + ce*randn;
@@ -101,6 +110,8 @@ for t = 1:n_trial
     et(t) = th - th_true;  er(t) = r - r_true;
 end
 rmse_th = rad2deg(sqrt(mean(et.^2)));  rmse_r = sqrt(mean(er.^2));
+st.med_th = rad2deg(median(abs(et)));  st.max_th = rad2deg(max(abs(et)));
+st.med_r  = median(abs(er));           st.max_r  = max(abs(er));
 end
 
 % ------------------------------------------------------------------ the scheme
