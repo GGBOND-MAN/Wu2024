@@ -99,7 +99,11 @@ def cbs_high(cfg, r_k, th_k, snr_db, rng, P=10, stagger_deg=30.0, n_grid=1500):
     th_hat = float(np.mean(ths))                                  # Eq. (26)
 
     # Eq. (27): pick r maximising |sum_p exp(j[phi_measured - phi_predicted(r)])|
-    grid = np.linspace(cfg.r_min, cfg.r_max, n_grid)
+    # Search beyond the sensing region: with the grid ending exactly at r_min, a
+    # search that pins to the lower edge scores ZERO error for a user at r_min,
+    # turning a failure into an apparently perfect result.  The margin makes
+    # edge-pinning visible as the error it is.
+    grid = np.linspace(cfg.r_min - 5.0, cfg.r_max + 10.0, n_grid)
     score = np.zeros(n_grid)
     acc = np.zeros(n_grid, dtype=complex)
     for p in range(P):
