@@ -1,12 +1,17 @@
 """
 Experiment C -- the missing threshold effect.
 
-Zhang2026 sizes its stage-II search window (1 deg, 1 m) from the stage-I RMSE,
-which is itself about 1 deg / 1 m at low SNR.  An RMSE of 1 m means a large
-fraction of realisations land further away than 1 m, so the truth falls outside
-the window and stage II returns a value pinned to the window edge.  Every real
-estimator built this way shows a threshold SNR below which outliers dominate;
-Fig. 10 shows smooth near-CRLB curves down to -10 dB and no threshold at all.
+RESULT: the threshold effect hypothesised here does NOT occur.  For a user on
+the trajectory the coarse power-spectrum peak is sharp and noise-robust, so the
+window captures the truth in 100% of trials at every SNR down to -10 dB.
+
+What the experiment found instead is worse for the paper: the stage-II MUSIC
+refinement DEGRADES the range by 7-18x relative to the stage-I estimate it is
+supposed to refine, at every SNR tested.  Stage I reads range off the
+frequency-space mapping and gets 0.14 m at -10 dB; stage II must recover range
+from single-frequency wavefront curvature with about two effective snapshots,
+so its peak wanders across the +-1 m window.  The paper's whole coarse-to-fine
+architecture is, for range, subtractive.
 
 To give the paper the best possible case the user is placed exactly ON the
 designed trajectory, so the structural failure of Experiment B is excluded and
@@ -86,8 +91,8 @@ def run():
     for a in ax:
         a.grid(True, which="both", alpha=.3)
     ax[1].legend(fontsize=7.5)
-    fig.suptitle("Experiment C: the threshold effect absent from Zhang2026 Fig. 10 "
-                 "(user placed exactly on the trajectory)", fontsize=10)
+    fig.suptitle("Experiment C: on-trajectory, stage I never fails -- but the stage-II MUSIC "
+                 "refinement makes the range 7-18x WORSE than the estimate it refines", fontsize=10)
     fig.tight_layout()
     fig.savefig(os.path.join(FIG, "exp_c_threshold.png"), dpi=140)
     np.savez(os.path.join(FIG, "exp_c.npz"), snr=SNRS, cap=cap, rmse_all=rmse_all,
