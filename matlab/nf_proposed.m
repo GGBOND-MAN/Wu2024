@@ -133,7 +133,6 @@ end
 
 function Wm = whitener(V)
 % Combined noise covariance is sigma^2 V^H V; whiten by its Cholesky factor.
-G = squeeze(sum(conj(permute(V,[1 2 3])).*permute(V,[1 2 3]),2));  %#ok<NASGU>
 T = size(V,3); G = zeros(T);
 for i = 1:T
     for j = 1:T
