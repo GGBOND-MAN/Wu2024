@@ -90,15 +90,22 @@ def whitener(V):
 
 
 def coarse_range(z, f, r0):
-    """Range from the phase slope of the sum channel, relative to the beam focus."""
+    """Range from the phase slope of the sum channel, relative to the beam focus.
+
+    The offset r - r0 is SIGNED: a user closer than the beam focus puts the peak
+    in the upper half of the transform, so the whole spectrum has to be searched
+    and bins past nfft/2 read as negative delays.  Searching only the lower half
+    silently returns the wrong range whenever r < r0.
+    """
     s = z.sum(axis=1)
     df = f[1] - f[0]
     nfft = 1 << int(np.ceil(np.log2(len(f) * 8)))
     prof = np.fft.fft(np.conj(s), n=nfft)
-    k = int(np.argmax(np.abs(prof[: nfft // 2])))
+    k = int(np.argmax(np.abs(prof)))
+    if k >= nfft // 2:
+        k -= nfft                                   # negative delay
     dr = k * C / (nfft * df)
-    # The FFT resolves |r - r0|; the sign follows from which side improves the fit.
-    return r0 + dr, r0 - dr
+    return (r0 + dr,)
 
 
 def estimate(cfg, z, V, f, th_init, r0, th_halfwidth=None):
