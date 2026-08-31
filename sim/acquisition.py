@@ -207,3 +207,96 @@ def sensitivity():
 
 if __name__ == "__main__":
     sensitivity()
+
+
+def V_monopulse(cfg, r0, th0, f, delta, extra=None):
+    """A constant-modulus monopulse pair, realisable with PS + TTD.
+
+    Focusing every subcarrier on one point (r, th) needs
+        phi_n = f0 * r_n / c        (phase shifters)
+        t_n   = r_n / c             (true-time delays)
+    which gives v_m[n] = exp(-j 2 pi f_m r_n / c) -- unit modulus, no amplitude
+    taper.  Two such beams steered to th0 +- delta span, to first order,
+        span{ a(th0), da/dtheta(th0) },
+    the same subspace the oracle T=2 result uses, but without ever asking the
+    hardware for the taper that da/dtheta implies.
+
+    `extra` optionally appends further focus points as additional columns.
+    """
+    pts = [(r0, th0 - delta), (r0, th0 + delta)] + list(extra or [])
+    cols = []
+    for (rr, tt) in pts:
+        d = dist_fresnel(rr, tt, cfg.x[None, :])
+        cols.append(np.exp(-2j * np.pi * np.asarray(f)[:, None] * d / C) / np.sqrt(cfg.N))
+    return np.linalg.qr(np.stack(cols, axis=2))[0]
+
+
+def monopulse():
+    cfg = Config()
+    r, th, snr = 30.0, np.deg2rad(15.0), 0.0
+    f = cfg.freqs[:: cfg.M // 64][:64]
+    b_full = bounds(fim(cfg, r, th, snr, f))[1]
+    bw = np.rad2deg(0.886 * cfg.lam / cfg.aperture)      # 3-dB beamwidth
+
+    print("=" * 76)
+    print("Constant-modulus monopulse pair (T=2) vs the oracle T=2 bound")
+    print("=" * 76)
+    print(f"  full-array bound RMSE_r = {b_full:.3e} m")
+    print(f"  3-dB beamwidth          = {bw:.4f} deg\n")
+    print(f"{'delta (deg)':>12}{'delta/BW':>10}{'RMSE_r (m)':>14}{'loss':>9}")
+    best = (np.inf, None)
+    for d_deg in (0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2):
+        V = V_monopulse(cfg, r, th, f, np.deg2rad(d_deg))
+        try:
+            v = bounds(fim(cfg, r, th, snr, f, V))[1]
+            print(f"{d_deg:>12.3f}{d_deg/bw:>10.2f}{v:>14.3e}{v/b_full:>8.2f}x")
+            if v < best[0]:
+                best = (v, d_deg)
+        except np.linalg.LinAlgError:
+            print(f"{d_deg:>12.3f}{d_deg/bw:>10.2f}{'singular':>14}{'':>9}")
+    print(f"\n  best: delta = {best[1]:.3f} deg ({best[1]/bw:.2f} beamwidths)"
+          f" -> {best[0]/b_full:.2f}x the full-array bound")
+
+    d_opt = np.deg2rad(best[1])
+    print("\n" + "=" * 76)
+    print("Robustness of the monopulse pair to coarse-angle error")
+    print("=" * 76)
+    for dth in (0., 0.016, 0.05, 0.1, 0.2, 0.4):
+        V = V_monopulse(cfg, r, th + np.deg2rad(dth), f, d_opt)
+        v = bounds(fim(cfg, r, th, snr, f, V))[1]
+        print(f"  coarse angle error {dth:5.3f} deg -> RMSE_r {v:.3e} m   loss {v/b_full:6.2f}x")
+
+    print("\n" + "=" * 76)
+    print("Robustness to coarse-range error (Experiment B leaves range unknown)")
+    print("=" * 76)
+    for dr in (0., 20., 47., 88.):
+        V = V_monopulse(cfg, r + dr, th + np.deg2rad(0.016), f, d_opt)
+        v = bounds(fim(cfg, r, th, snr, f, V))[1]
+        print(f"  angle 0.016 deg + range {dr:3.0f} m -> RMSE_r {v:.3e} m   loss {v/b_full:6.2f}x")
+
+    print("\n" + "=" * 76)
+    print("Does a third constant-modulus beam help?")
+    print("=" * 76)
+    for name, extra in (("pair only (T=2)", None),
+                        ("+ centre beam (T=3)", [(r, th)]),
+                        ("+ range-offset beam (T=3)", [(r * 1.5, th)]),
+                        ("+ both (T=4)", [(r, th), (r * 1.5, th)])):
+        V = V_monopulse(cfg, r, th + np.deg2rad(0.016), f, d_opt, extra)
+        v = bounds(fim(cfg, r, th, snr, f, V))[1]
+        print(f"  {name:<28} RMSE_r {v:.3e} m   loss {v/b_full:6.2f}x")
+
+    print("\n" + "=" * 76)
+    print("Across the sensing region, at delta_opt and 0.016 deg coarse error")
+    print("=" * 76)
+    for rr in (15., 30., 50.):
+        for td in (0., 30., 55.):
+            t = np.deg2rad(td)
+            bf = bounds(fim(cfg, rr, t, snr, f))[1]
+            V = V_monopulse(cfg, 30.0, t + np.deg2rad(0.016), f, d_opt)   # range guess fixed at 30 m
+            v = bounds(fim(cfg, rr, t, snr, f, V))[1]
+            print(f"  (r={rr:4.0f} m, th={td:4.0f} deg)  full {bf:.3e}  monopulse {v:.3e}"
+                  f"   loss {v/bf:6.2f}x")
+
+
+if __name__ == "__main__":
+    monopulse()
