@@ -117,7 +117,7 @@ def ml_refine(Y, freqs, x, th0, r0, n_sub=64):
         return -abs(np.vdot(A, Ys))
 
     sol = minimize(negmf, [r0, th0], method="Nelder-Mead",
-                   options=dict(xatol=1e-11, fatol=1e-11, maxiter=400))
+                   options=dict(xatol=1e-10, fatol=1e-10, maxiter=250))
     return sol.x[1], sol.x[0]
 
 
