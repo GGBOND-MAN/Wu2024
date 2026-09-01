@@ -103,7 +103,11 @@ def cbs_high(cfg, r_k, th_k, snr_db, rng, P=10, stagger_deg=30.0, n_grid=1500):
     # search that pins to the lower edge scores ZERO error for a user at r_min,
     # turning a failure into an apparently perfect result.  The margin makes
     # edge-pinning visible as the error it is.
-    grid = np.linspace(cfg.r_min - 5.0, cfg.r_max + 10.0, n_grid)
+    # Lower edge clamped strictly positive: dist_fresnel divides by r, so a grid
+    # reaching 0 fills the score with NaN and argmax silently returns the first
+    # bin.  With the default r_min = 15 the margin never reached 0 and this never
+    # fired; it does the moment r_min <= 5, as in Luo2024's own Fig. 13 setup.
+    grid = np.linspace(max(1.0, cfg.r_min - 5.0), cfg.r_max + 10.0, n_grid)
     score = np.zeros(n_grid)
     acc = np.zeros(n_grid, dtype=complex)
     for p in range(P):
