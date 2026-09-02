@@ -39,7 +39,17 @@ function calibrate_baselines(mode)
 if nargin < 1, mode = 'all'; end
 
 % ===================== EDIT THESE AFTER EACH CALIBRATION =====================
-CFG.stagger_deg = 30.0;    % <- set from mode 'stagger'
+CFG.stagger_deg = 4.0;     % <- set from mode 'stagger'
+CFG.stagger_mode = 'total';% 'total' = the P sweeps divide a fixed angular span,
+                           % so the span does not grow with P and only sqrt(P)
+                           % averaging applies.
+                           % 'step'  = a fixed angular STEP between consecutive
+                           % sweeps, so the span grows as (P-1) and the peak
+                           % subcarriers spread further as P rises.
+                           % Luo2024 says only that the spans differ "slightly",
+                           % which does not distinguish the two -- and they scale
+                           % with P completely differently.  Mode 'stagger' now
+                           % fits both and reports which reproduces the paper.
 CFG.rmid_frac   = 0.5;     % <- set from mode 'rmid'  (fraction across the region)
 CFG.n_grid      = 4000;    % <- set from mode 'grid'
 CFG.S_sub       = 64;      % <- set from mode 'S'
@@ -60,26 +70,41 @@ end
 
 function fit_stagger(CFG)
 fprintf('\n=== 1. Luo2024 sweep stagger, against its Fig. 13 anchors ===\n');
+fprintf('Anchors: P=4 -> 0.031 deg / 0.165 m,  P=12 -> 0.018 deg / 0.037 m\n\n');
+fprintf('The angle turns out to be nearly flat in the stagger, so it validates the\n');
+fprintf('angle implementation but carries almost no information about the value.\n');
+fprintf('The fit is driven by the range, and by HOW the range improves from P=4 to\n');
+fprintf('P=12: the paper reports 4.5x, which is far steeper than the sqrt(3)=1.73x\n');
+fprintf('that sqrt(P) averaging alone can give.  That gap is the reason both\n');
+fprintf('parameterisations are tried below.\n');
 cfg = luo_config();
-STAG = [0.5 1 2 4 8 16 30 45];
-fprintf('%10s | %-26s | %-26s | %s\n','stagger', ...
-        'P=4  (target .031/.165)','P=12 (target .018/.037)','mismatch');
-best = struct('err', inf, 'val', NaN);
-for s = STAG
-    [t4, r4] = luo_high_rmse(cfg, 4,  s, CFG, 5);
-    [t12,r12] = luo_high_rmse(cfg, 12, s, CFG, 15);
-    % relative log-distance to all four anchors, so no metric dominates
-    e = mean(abs(log([t4/0.031, r4/0.165, t12/0.018, r12/0.037])));
-    fprintf('%9.1f deg | %10.4f %14.4f | %10.4f %14.4f | %6.3f\n', ...
-            s, t4, r4, t12, r12, e);
-    if e < best.err, best.err = e; best.val = s; end
+best = struct('err', inf, 'val', NaN, 'mode', '');
+for md = {'total','step'}
+    fprintf('\n--- stagger_mode = ''%s'' ---\n', md{1});
+    if strcmp(md{1},'step'), STAG = [0.2 0.5 1 2 4 8];
+    else,                    STAG = [0.5 1 2 4 8 16 30 45]; end
+    fprintf('%10s | %-22s | %-22s | %8s %8s\n', ...
+            'stagger','P=4  (.031/.165)','P=12 (.018/.037)','P4->P12','mismatch');
+    for s = STAG
+        c2 = CFG; c2.stagger_mode = md{1};
+        [t4, r4]  = luo_high_rmse(cfg, 4,  s, c2, 5);
+        [t12,r12] = luo_high_rmse(cfg, 12, s, c2, 15);
+        e = mean(abs(log([t4/0.031, r4/0.165, t12/0.018, r12/0.037])));
+        fprintf('%9.2f deg | %8.4f %12.4f | %8.4f %12.4f | %7.2fx %8.3f\n', ...
+                s, t4, r4, t12, r12, r4/r12, e);
+        if e < best.err, best.err = e; best.val = s; best.mode = md{1}; end
+    end
 end
-fprintf('\n  BEST stagger = %.1f deg  (mean log-mismatch %.3f)\n', best.val, best.err);
-fprintf('  -> set CFG.stagger_deg = %.1f and re-run the other modes.\n', best.val);
-fprintf('  A mismatch below ~0.2 means every anchor is matched within about 20%%.\n');
-fprintf('  If the best is far larger, the model differs from theirs somewhere\n');
-fprintf('  else and the stagger alone cannot absorb it -- say so rather than\n');
-fprintf('  quoting whichever value happens to win.\n');
+fprintf('\n  Luo2024''s own P=4 -> P=12 range improvement is 0.165/0.037 = 4.46x.\n');
+fprintf('  Whichever mode reproduces THAT ratio is the one matching their scheme;\n');
+fprintf('  a mode that cannot reach it is the wrong parameterisation, however\n');
+fprintf('  well a single anchor happens to fit.\n');
+fprintf('\n  BEST: stagger_mode = ''%s'', stagger = %.2f deg (mismatch %.3f)\n', ...
+        best.mode, best.val, best.err);
+fprintf('  -> set CFG.stagger_mode and CFG.stagger_deg accordingly.\n');
+fprintf('  Below ~0.2 means all four anchors within about 20%%.  If neither mode\n');
+fprintf('  gets there, report that the paper''s numbers cannot be reproduced from\n');
+fprintf('  what it states -- that is a finding, not a failure.\n');
 end
 
 function fit_rmid(CFG)
@@ -162,7 +187,11 @@ r_mid = cfg.r_min + CFG.rmid_frac*(cfg.r_max - cfg.r_min);
 ths = zeros(P,1); fs = zeros(P,1); phases = zeros(P,1);
 phis = zeros(P,cfg.N); taus = zeros(P,cfg.N);
 for p = 1:P
-    pad = deg2rad(stagger_deg)*((p-1) - (P-1)/2)/max(P-1,1);
+    if strcmp(CFG.stagger_mode, 'step')
+        pad = deg2rad(stagger_deg)*((p-1) - (P-1)/2);          % span grows with P
+    else
+        pad = deg2rad(stagger_deg)*((p-1) - (P-1)/2)/max(P-1,1);% span fixed
+    end
     th_s = cfg.theta_max + pad;  th_e = cfg.theta_min - pad;
     [tt, ~] = trajectory(cfg, th_s, r_mid, th_e, r_mid);
     [phi, tau] = ttd_ps(cfg, th_s, r_mid, th_e, r_mid);
