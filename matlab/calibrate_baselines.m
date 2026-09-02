@@ -83,24 +83,39 @@ for md = {'total','step'}
     fprintf('\n--- stagger_mode = ''%s'' ---\n', md{1});
     if strcmp(md{1},'step'), STAG = [0.2 0.5 1 2 4 8];
     else,                    STAG = [0.5 1 2 4 8 16 30 45]; end
-    fprintf('%10s | %-22s | %-22s | %8s %8s\n', ...
-            'stagger','P=4  (.031/.165)','P=12 (.018/.037)','P4->P12','mismatch');
+    fprintf('%10s | %-22s | %-22s | %8s %8s %9s\n', ...
+            'stagger','P=4  (.031/.165)','P=12 (.018/.037)', ...
+            'P4->P12','mismatch','inconsist');
     for s = STAG
         c2 = CFG; c2.stagger_mode = md{1};
         [t4, r4]  = luo_high_rmse(cfg, 4,  s, c2, 5);
         [t12,r12] = luo_high_rmse(cfg, 12, s, c2, 15);
-        e = mean(abs(log([t4/0.031, r4/0.165, t12/0.018, r12/0.037])));
-        fprintf('%9.2f deg | %8.4f %12.4f | %8.4f %12.4f | %7.2fx %8.3f\n', ...
-                s, t4, r4, t12, r12, r4/r12, e);
-        if e < best.err, best.err = e; best.val = s; best.mode = md{1}; end
+        ra = [t4/0.031, t12/0.018];        % per-anchor ratios, angle
+        rr = [r4/0.165, r12/0.037];        % per-anchor ratios, range
+        e = mean(abs(log([ra rr])));
+        % A UNIFORM offset on each metric is explainable -- an SNR convention,
+        % a grid resolution.  A ratio that differs BETWEEN anchors of the same
+        % metric is not, and means the mechanism is still wrong.  Scoring only
+        % the mean log-distance rewards a low average over a consistent shape,
+        % so inconsistency is scored separately and reported alongside.
+        inc = abs(log(ra(1)/ra(2))) + abs(log(rr(1)/rr(2)));
+        fprintf('%9.2f deg | %8.4f %12.4f | %8.4f %12.4f | %7.2fx %8.3f %9.3f\n', ...
+                s, t4, r4, t12, r12, r4/r12, e, inc);
+        if e + inc < best.err
+            best.err = e + inc; best.val = s; best.mode = md{1};
+            best.e = e; best.inc = inc; best.ratio = r4/r12;
+        end
     end
 end
 fprintf('\n  Luo2024''s own P=4 -> P=12 range improvement is 0.165/0.037 = 4.46x.\n');
 fprintf('  Whichever mode reproduces THAT ratio is the one matching their scheme;\n');
 fprintf('  a mode that cannot reach it is the wrong parameterisation, however\n');
 fprintf('  well a single anchor happens to fit.\n');
-fprintf('\n  BEST: stagger_mode = ''%s'', stagger = %.2f deg (mismatch %.3f)\n', ...
-        best.mode, best.val, best.err);
+fprintf('\n  BEST: stagger_mode = ''%s'', stagger = %.2f deg\n', best.mode, best.val);
+fprintf('        mismatch %.3f, inconsistency %.3f, P4->P12 ratio %.2fx vs 4.46 target\n', ...
+        best.e, best.inc, best.ratio);
+fprintf('  Selection is on mismatch PLUS inconsistency: a uniform offset per\n');
+fprintf('  metric is explainable, an anchor-dependent one is not.\n');
 fprintf('  -> set CFG.stagger_mode and CFG.stagger_deg accordingly.\n');
 fprintf('  Below ~0.2 means all four anchors within about 20%%.  If neither mode\n');
 fprintf('  gets there, report that the paper''s numbers cannot be reproduced from\n');
