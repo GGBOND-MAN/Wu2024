@@ -170,6 +170,8 @@ fprintf('|S| = M the incoherent bound of its own class is 4.91e-3 m at 20 dB.\n'
 fprintf('So use the largest tractable |S| and report it as the most generous\n');
 fprintf('assumption available, rather than fitting a value.\n\n');
 cfg = zhang_config();
+fprintf('user placed ON the trajectory at (%.3f deg, %.3f m) -- its best case.\n\n', ...
+        rad2deg(cfg.th_k), cfg.r_k);
 fprintf('%8s | %14s | %16s | %s\n','|S|','RMSE_r (m)','incoherent bound','claim reachable?');
 for S = [1 5 16 64 256]
     c2 = CFG; c2.S_sub = S;
@@ -300,7 +302,17 @@ function c = zhang_config()
 c = base_config(256, 3e9, 2048);
 c.r_min = 15; c.r_max = 50;
 c.theta_min = deg2rad(-60); c.theta_max = deg2rad(60);
-c.r_k = 30; c.th_k = deg2rad(15); c.snr = 0;
+c.snr = 0;
+% The user must sit ON the designed trajectory.  Off it, the coarse stage
+% returns whatever range the trajectory holds at that angle -- about 101 m for
+% a user at (30 m, 15 deg) -- and the 1 m refinement window cannot recover, so
+% every |S| returns the same 71.6 m and the sweep measures the off-trajectory
+% failure instead of the |S| dependence.  Zhang2026 is entitled to its best
+% case here, which is the on-trajectory point.
+[tt, tr] = trajectory(c, c.theta_min, c.r_min, c.theta_max, c.r_max);
+ok = find(tr >= c.r_min & tr <= c.r_max);
+[~, j] = min(abs(tr(ok) - 30));
+c.r_k = tr(ok(j));  c.th_k = tt(ok(j));
 end
 
 function c = base_config(N, W, M)
