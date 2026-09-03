@@ -69,26 +69,34 @@ def _phase_at(cfg, rs, th, phi, tau, f_m):
     return np.angle(np.exp(2j * np.pi * ph).sum(axis=1))
 
 
-def cbs_high(cfg, r_k, th_k, snr_db, rng, P=10, stagger_deg=30.0, n_grid=1500):
+def cbs_high(cfg, r_k, th_k, snr_db, rng, P=10, stagger_deg=1.0, n_grid=16000,
+             stagger_mode="step"):
     """Luo2024 CBS-High: P staggered sweeps, angle averaged, range from phases.
 
     P probes.  The range search (its Eq. 27) coherently combines the measured
     phases of the P peak subcarriers, which is a sparse sampling of the delay
     axis -- P points out of M, at irregular spacings.
     """
+    # r_mid1 = r_mid2 at the region midpoint.  The author confirms the two were
+    # equal, and calibration shows the angle anchors do not depend on the value:
+    # across 0.15-0.85 of the region the spread was 10.3%, against the 9.1%
+    # standard error of the trial count, so it is noise rather than dependence.
     r_mid = 0.5 * (cfg.r_min + cfg.r_max)
     ths, fs, phases, wts = [], [], [], []
     for p in range(P):
-        # Each sweep spans slightly differently, as Luo2024 Sec. IV-C requires.
-        # The paper never specifies how much, yet the stagger sets both the
-        # ranging resolution and the 2-pi ambiguity it never discusses, so the
-        # value is exposed as a parameter and tuned in the baseline's favour:
-        # accuracy improves monotonically with it, so the default is the largest
-        # stagger that keeps every sweep inside +-75 deg of broadside.  That the
-        # baseline improves as it spans more of the band is itself telling --
-        # CBS-High is already doing sparse delay-domain ranging, at P irregular
-        # tones instead of all M coherently.
-        pad = np.deg2rad(stagger_deg) * (p - (P - 1) / 2) / max(P - 1, 1)
+        # Luo2024 Sec. IV-C requires slightly different spans per sweep but never
+        # says how they are laid out, and the two natural readings scale with P
+        # differently: dividing a fixed span among P sweeps tops out at a 2.1x
+        # range improvement from P=4 to P=12, while a fixed STEP grows the span
+        # as (P-1) and reaches the paper's own 4.46x.  Calibrating against its
+        # Fig. 13 anchors selects the step reading, and the author confirms it:
+        # the spans run "60, 61, 62 ..." symmetrically about broadside.  The
+        # 1 degree step is the author's recollection, and matches the P=12
+        # anchor to 1.02x.
+        if stagger_mode == "step":
+            pad = np.deg2rad(stagger_deg) * (p - (P - 1) / 2)
+        else:
+            pad = np.deg2rad(stagger_deg) * (p - (P - 1) / 2) / max(P - 1, 1)
         th_s, th_e = cfg.theta_max + pad, cfg.theta_min - pad
         th_t, _ = trajectory(cfg, th_s, r_mid, th_e, r_mid)
         z = sweep(cfg, r_k, th_k, th_s, r_mid, th_e, r_mid, snr_db, rng)

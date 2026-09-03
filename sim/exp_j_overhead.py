@@ -39,8 +39,14 @@ TS, RS, TE, RE = np.deg2rad(-60), 15.0, np.deg2rad(60), 50.0
 PROBES = {"cbs_low": 2, "cbs_high": 10, "zhang": 256, "proposed": 3}
 
 
-def zhang_pipeline(cfg, r_k, th_k, snr, rng, n_sub=5):
-    """Zhang2026: squint power peak, then geometry-compensated local MUSIC."""
+def zhang_pipeline(cfg, r_k, th_k, snr, rng, n_sub=64):
+    """Zhang2026: squint power peak, then geometry-compensated local MUSIC.
+
+    |S| is the one calibration target that cannot be fitted: its only anchor is
+    the claim of sub-millimetre ranging, and no |S| reaches it -- the incoherent
+    bound of its own class is 4.9e-2 m at |S| = M.  So it is set as large as is
+    tractable and reported as the most generous assumption available.
+    """
     th_t, r_t = trajectory(cfg, TS, RS, TE, RE)
     phi, tau = ttd_ps_weights(cfg, TS, RS, TE, RE)
     z = coarse_observation(cfg, r_k, th_k, phi, tau)
